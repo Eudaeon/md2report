@@ -10,14 +10,23 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write # to create the release and attach the archives to it
+# Nothing is granted by default, and the one job that publishes asks for what
+# it needs. A job added later starts with nothing rather than inheriting the
+# write token this one needs.
+permissions: {}
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release and attach the archives to it
     steps:
+      # The release is published through the API with GH_TOKEN and nothing here
+      # pushes to the repository, so the token has no reason to stay behind in
+      # .git/config where every later step and action could read it.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
