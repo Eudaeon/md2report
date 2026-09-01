@@ -7,12 +7,16 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+# Nothing is granted by default, and the one job that runs the checks asks for
+# what it needs. A job added later starts with nothing rather than inheriting
+# the token this one reads with.
+permissions: {}
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # to check the repository out
     steps:
       # Nothing here writes to the repository, so the token is not left behind
       # in .git/config for every later step and action to read.
