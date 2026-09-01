@@ -1,0 +1,77 @@
+# A release is cut by pushing a tag:
+#
+#     git tag -a v1.0.0 -m "v1.0.0" && git push origin v1.0.0
+#
+# The tag is the version. It is stamped into every binary, so a document that
+# came out wrong can be traced back to the build that wrote it with -version.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # to create the release and attach the archives to it
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # A tag can be pushed at any commit, so nothing is published before the
+      # suite passes on the one being released.
+      - run: go test ./...
+
+      # The notes are the changelog section named after the tag, cut at the next
+      # heading. A tag with no section of its own stops the release here, before
+      # anything is built or published: the notes of a release are written
+      # before its tag is pushed, and empty notes are worse than no release.
+      - name: Take the release notes from the changelog
+        run: |
+          awk -v tag="$GITHUB_REF_NAME" '
+            /^## / { if (found) exit; found = ($2 == tag); next }
+            found
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md carries no '## $GITHUB_REF_NAME' section" >&2
+            exit 1
+          fi
+
+      # The module needs nothing outside the standard library and no cgo, so
+      # every target cross-compiles here rather than on a runner of its own.
+      - name: Build the archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            export GOOS="${target%/*}" GOARCH="${target#*/}"
+            name="md2report_${VERSION}_${GOOS}_${GOARCH}"
+            binary=md2report
+            if [ "$GOOS" = windows ]; then binary=md2report.exe; fi
+
+            mkdir "dist/$name"
+            CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/$name/$binary" ./cmd/md2report
+            # The tool fills a template it does not carry inside itself, so the
+            # template travels with it: an archive holding only the binary
+            # cannot produce a report on a machine without a checkout.
+            cp Template.docx README.md CHANGELOG.md LICENSE "dist/$name/"
+
+            if [ "$GOOS" = windows ]; then
+              (cd dist && zip -qr "$name.zip" "$name")
+            else
+              tar -czf "dist/$name.tar.gz" -C dist "$name"
+            fi
+            rm -r "dist/$name"
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file notes.md dist/*
